@@ -61,6 +61,9 @@ int Run(int argc, char** argv) {
         return 0;
     }
 
+    // Controllers keep working while another app has focus (macOS drops
+    // joystick events for background apps by default).
+    SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
     // SDL first, on the main thread: guest threads use its audio right away.
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD | SDL_INIT_AUDIO)) {
         DC_ERROR("SDL_Init: %s", SDL_GetError());
@@ -79,6 +82,9 @@ int Run(int argc, char** argv) {
         DC_ERROR("SDL_CreateWindow: %s", SDL_GetError());
         return 1;
     }
+    // Launched from a shell the window may not become the active app, and
+    // then it never gets key events.
+    SDL_RaiseWindow(window);
     SDL_MetalView view = SDL_Metal_CreateView(window);
 
     Gpu::Metal::PresenterConfig config{};
@@ -98,6 +104,7 @@ int Run(int argc, char** argv) {
     int frames = 0;
 
     bool running = true;
+    bool steer_left = false, steer_right = false; // A/D keys
     while (running) {
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
@@ -138,26 +145,74 @@ int Run(int argc, char** argv) {
                     Hle::Pad::SetButton(Hle::Pad::kTriangle, pressed);
                     break;
                 case SDLK_UP:
-                case SDLK_W:
                     Hle::Pad::SetButton(Hle::Pad::kUp, pressed);
                     break;
                 case SDLK_DOWN:
-                case SDLK_S:
                     Hle::Pad::SetButton(Hle::Pad::kDown, pressed);
                     break;
                 case SDLK_LEFT:
-                case SDLK_A:
                     Hle::Pad::SetButton(Hle::Pad::kLeft, pressed);
                     break;
                 case SDLK_RIGHT:
-                case SDLK_D:
                     Hle::Pad::SetButton(Hle::Pad::kRight, pressed);
                     break;
+                // Driving: W/S throttle and brake (R2/L2), A/D steer (left stick).
+                case SDLK_W:
+                    Hle::Pad::SetTrigger(true, pressed ? 255 : 0);
+                    break;
+                case SDLK_S:
+                    Hle::Pad::SetTrigger(false, pressed ? 255 : 0);
+                    break;
+                case SDLK_A:
+                case SDLK_D: {
+                    (ev.key.key == SDLK_A ? steer_left : steer_right) = pressed;
+                    Hle::Pad::SetStick(false, steer_left == steer_right ? 128 : steer_left ? 0 : 255, 128);
+                    break;
+                }
                 case SDLK_Q:
                     Hle::Pad::SetButton(Hle::Pad::kL1, pressed);
                     break;
                 case SDLK_E:
                     Hle::Pad::SetButton(Hle::Pad::kR1, pressed);
+                    break;
+                default:
+                    break;
+                }
+                break;
+            }
+            case SDL_EVENT_GAMEPAD_ADDED:
+                // SDL3 sends gamepad input only for opened gamepads.
+                if (SDL_Gamepad* pad = SDL_OpenGamepad(ev.gdevice.which)) {
+                    DC_INFO("pad: connected %s", SDL_GetGamepadName(pad));
+                }
+                break;
+            case SDL_EVENT_GAMEPAD_REMOVED:
+                if (SDL_Gamepad* pad = SDL_GetGamepadFromID(ev.gdevice.which)) {
+                    SDL_CloseGamepad(pad);
+                }
+                break;
+            case SDL_EVENT_GAMEPAD_AXIS_MOTION: {
+                // Sticks: -32768..32767 -> 0..255 (128 centered); triggers: 0..32767 -> 0..255.
+                const auto stick = [](Sint16 v) { return static_cast<u8>((v + 32768) >> 8); };
+                SDL_Gamepad* pad = SDL_GetGamepadFromID(ev.gaxis.which);
+                if (!pad) {
+                    break;
+                }
+                switch (ev.gaxis.axis) {
+                case SDL_GAMEPAD_AXIS_LEFTX:
+                case SDL_GAMEPAD_AXIS_LEFTY:
+                    Hle::Pad::SetStick(false, stick(SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFTX)),
+                                       stick(SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFTY)));
+                    break;
+                case SDL_GAMEPAD_AXIS_RIGHTX:
+                case SDL_GAMEPAD_AXIS_RIGHTY:
+                    Hle::Pad::SetStick(true, stick(SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_RIGHTX)),
+                                       stick(SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_RIGHTY)));
+                    break;
+                case SDL_GAMEPAD_AXIS_LEFT_TRIGGER:
+                case SDL_GAMEPAD_AXIS_RIGHT_TRIGGER:
+                    Hle::Pad::SetTrigger(ev.gaxis.axis == SDL_GAMEPAD_AXIS_RIGHT_TRIGGER,
+                                         static_cast<u8>(std::max<int>(ev.gaxis.value, 0) >> 7));
                     break;
                 default:
                     break;
@@ -200,6 +255,16 @@ int Run(int argc, char** argv) {
                     break;
                 case SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER:
                     Hle::Pad::SetButton(Hle::Pad::kR1, pressed);
+                    break;
+                case SDL_GAMEPAD_BUTTON_LEFT_STICK:
+                    Hle::Pad::SetButton(Hle::Pad::kL3, pressed);
+                    break;
+                case SDL_GAMEPAD_BUTTON_RIGHT_STICK:
+                    Hle::Pad::SetButton(Hle::Pad::kR3, pressed);
+                    break;
+                case SDL_GAMEPAD_BUTTON_BACK:
+                case SDL_GAMEPAD_BUTTON_TOUCHPAD:
+                    Hle::Pad::SetButton(Hle::Pad::kTouchPad, pressed);
                     break;
                 default:
                     break;
