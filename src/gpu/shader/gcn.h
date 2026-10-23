@@ -190,7 +190,11 @@ constexpr u16 Vgpr0 = 256;
 
 #define GCN_MIMG(X)                                                                                \
     X(IMAGE_LOAD, 0) X(IMAGE_LOAD_MIP, 1) X(IMAGE_STORE, 8) X(IMAGE_STORE_MIP, 9)                  \
-    X(IMAGE_GET_RESINFO, 14) X(IMAGE_ATOMIC_ADD, 17) X(IMAGE_SAMPLE, 32) X(IMAGE_SAMPLE_CL, 33)    \
+    X(IMAGE_GET_RESINFO, 14) X(IMAGE_ATOMIC_SWAP, 15) X(IMAGE_ATOMIC_CMPSWAP, 16)                 \
+    X(IMAGE_ATOMIC_ADD, 17) X(IMAGE_ATOMIC_SUB, 18) X(IMAGE_ATOMIC_SMIN, 20)                       \
+    X(IMAGE_ATOMIC_UMIN, 21) X(IMAGE_ATOMIC_SMAX, 22) X(IMAGE_ATOMIC_UMAX, 23)                     \
+    X(IMAGE_ATOMIC_AND, 24) X(IMAGE_ATOMIC_OR, 25) X(IMAGE_ATOMIC_XOR, 26)                         \
+    X(IMAGE_ATOMIC_INC, 27) X(IMAGE_ATOMIC_DEC, 28) X(IMAGE_SAMPLE, 32) X(IMAGE_SAMPLE_CL, 33)     \
     X(IMAGE_SAMPLE_D, 34) X(IMAGE_SAMPLE_D_CL, 35) X(IMAGE_SAMPLE_L, 36) X(IMAGE_SAMPLE_B, 37)     \
     X(IMAGE_SAMPLE_B_CL, 38) X(IMAGE_SAMPLE_LZ, 39) X(IMAGE_SAMPLE_C, 40)                          \
     X(IMAGE_SAMPLE_C_CL, 41) X(IMAGE_SAMPLE_C_D, 42) X(IMAGE_SAMPLE_C_D_CL, 43)                    \

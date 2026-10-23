@@ -1723,6 +1723,12 @@ struct MetalRenderer::Impl {
                           MTLTextureUsageShaderWrite |
                           MTLTextureUsagePixelFormatView;
     }
+    // 32-bit integer images may be targets of IMAGE_ATOMIC_* (texture atomics).
+    if (fmt == MTLPixelFormatR32Uint || fmt == MTLPixelFormatR32Sint) {
+      if (@available(macOS 14.0, *)) {
+        d.usage |= MTLTextureUsageShaderAtomic;
+      }
+    }
     return [device newTextureWithDescriptor:d];
   }
 

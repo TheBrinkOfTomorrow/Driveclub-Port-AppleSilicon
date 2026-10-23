@@ -1140,6 +1140,62 @@ void Emitter::EmitImage(const Inst& i) {
         if (tt.dim == TexDim::Tex2DArray) return "uint2(" + VName(a) + ", " + VName(a + 1) + "), " + VName(a + 2);
         return "uint3(" + VName(a) + ", " + VName(a + 1) + ", " + VName(a + 2) + ")";
     };
+    if (op >= Mimg::IMAGE_ATOMIC_SWAP && op <= Mimg::IMAGE_ATOMIC_DEC) {
+        // Metal texture atomics (MSL 3.1) on 32-bit integer images. With GLC the
+        // pre-op value goes back to vdata; CMPSWAP takes {src, cmp} in vdata.
+        if (tt.sample == TexSample::Float) {
+            Unsupported(i);
+            return;
+        }
+        const bool sint = tt.sample == TexSample::Sint;
+        const std::string T = sint ? "int" : "uint";
+        const std::string data = sint ? "as_type<int>(" + VName(i.vdata) + ")" : VName(i.vdata);
+        const std::string at = int_coord(i.vaddr) + ", ";
+        auto native = [&](const char* fn) { return t + "." + fn + "(" + at + T + "4(" + data + ")).x"; };
+        // Compare-exchange loop for ops Metal has no texture atomic for: `next`
+        // computes the new value from `o_` (old, as T) and `d_` (data, as T).
+        auto cas = [&](const std::string& next) {
+            Line("  " + T + " d_ = " + data + "; " + T + "4 e_ = " + t + ".read(" + int_coord(i.vaddr) + ");");
+            Line("  for (;;) { " + T + " o_ = e_.x; if (" + t + ".atomic_compare_exchange_weak(" + at + "&e_, " + T +
+                 "4(" + next + "))) { e_.x = o_; break; } }");
+            return std::string("e_.x");
+        };
+        Line((p.writes_exec ? "if (exec_lo != 0u) {" : "{"));
+        std::string old;
+        switch (op) {
+        case Mimg::IMAGE_ATOMIC_SWAP: old = native("atomic_exchange"); break;
+        case Mimg::IMAGE_ATOMIC_ADD: old = native("atomic_fetch_add"); break;
+        case Mimg::IMAGE_ATOMIC_SUB: old = native("atomic_fetch_sub"); break;
+        case Mimg::IMAGE_ATOMIC_AND: old = native("atomic_fetch_and"); break;
+        case Mimg::IMAGE_ATOMIC_OR: old = native("atomic_fetch_or"); break;
+        case Mimg::IMAGE_ATOMIC_XOR: old = native("atomic_fetch_xor"); break;
+        case Mimg::IMAGE_ATOMIC_SMIN: old = sint ? native("atomic_fetch_min") : cas("uint(min(int(o_), int(d_)))"); break;
+        case Mimg::IMAGE_ATOMIC_SMAX: old = sint ? native("atomic_fetch_max") : cas("uint(max(int(o_), int(d_)))"); break;
+        case Mimg::IMAGE_ATOMIC_UMIN: old = !sint ? native("atomic_fetch_min") : cas("int(min(uint(o_), uint(d_)))"); break;
+        case Mimg::IMAGE_ATOMIC_UMAX: old = !sint ? native("atomic_fetch_max") : cas("int(max(uint(o_), uint(d_)))"); break;
+        case Mimg::IMAGE_ATOMIC_INC: old = cas("uint(o_) >= uint(d_) ? " + T + "(0) : o_ + 1"); break;
+        case Mimg::IMAGE_ATOMIC_DEC: old = cas("(o_ == 0 || uint(o_) > uint(d_)) ? d_ : o_ - 1"); break;
+        case Mimg::IMAGE_ATOMIC_CMPSWAP: {
+            const std::string cmp = sint ? "as_type<int>(" + VName(i.vdata + 1) + ")" : VName(i.vdata + 1);
+            Line("  " + T + "4 e_ = " + T + "4(" + cmp + ");");
+            Line("  while (!" + t + ".atomic_compare_exchange_weak(" + at + "&e_, " + T + "4(" + data + ")) && e_.x == " +
+                 cmp + ") {}");
+            old = "e_.x";
+            break;
+        }
+        default:
+            Unsupported(i);
+            Line("}");
+            return;
+        }
+        if (i.glc) {
+            SetV(i.vdata, "as_type<uint>(" + old + ")");
+        } else {
+            Line("  (void)" + old + ";");
+        }
+        Line("}");
+        return;
+    }
     if (op == Mimg::IMAGE_STORE || op == Mimg::IMAGE_STORE_MIP) {
         // Data registers hold the components selected by dmask, in order.
         std::string comps[4] = {"0u", "0u", "0u", "0u"};
