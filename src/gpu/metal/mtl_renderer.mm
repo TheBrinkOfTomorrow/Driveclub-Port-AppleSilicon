@@ -2730,6 +2730,13 @@ void MetalRenderer::Impl::Draw(const RegFile &r, const DrawCall &dc) {
       }
     }
     fo.textures = ps_types;
+    if (colors[0] && ((r[Reg::CB_BLEND0_CONTROL] >> 30) & 1)) {
+      const u32 b = r[Reg::CB_BLEND0_CONTROL];
+      auto src1 = [](u32 f) { return f >= 15 && f <= 18; };
+      fo.dual_source = src1(b & 0x1F) || src1((b >> 8) & 0x1F) ||
+                       (((b >> 29) & 1) && (src1((b >> 16) & 0x1F) ||
+                                            src1((b >> 24) & 0x1F)));
+    }
     fo.depth_target = depth != nullptr;
     fo.depth_bounds = depth_bounds;
     if (probe_slot >= 0) {
@@ -2741,6 +2748,7 @@ void MetalRenderer::Impl::Draw(const RegFile &r, const DrawCall &dc) {
     ps_key = Hash(fo.probe_pc, ps_key);
     ps_key = Hash(fo.depth_target, ps_key);
     ps_key = Hash(fo.depth_bounds, ps_key);
+    ps_key = Hash(fo.dual_source, ps_key);
     ps_key = Fnv(fo.ps_input_cntl.data(), sizeof(fo.ps_input_cntl), ps_key);
     ps_key = Hash(fo.vs_param_mask, ps_key);
     ps_key = Hash(fo.ps_input_addr, ps_key);

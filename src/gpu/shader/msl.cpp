@@ -1367,11 +1367,14 @@ void Emitter::EmitExp(const Inst& i) {
     if (i.target >= 8) {
         return;
     }
-    const u32 fmt = (o.col_format >> (4 * i.target)) & 0xF;
+    // Dual-source blending: MRT1 is the second source of target 0 and is
+    // converted like MRT0.
+    const u32 rt = o.dual_source && i.target == 1 ? 0u : u32(i.target);
+    const u32 fmt = (o.col_format >> (4 * rt)) & 0xF;
     if (fmt == 0) {
         return;
     }
-    const OutType type = o.mrt_type[i.target];
+    const OutType type = o.mrt_type[rt];
     const std::string dst = "out.c" + N(i.target);
     // DC_PS_REG=<ps address hex>:<vgpr>: that shader exports vN..vN+2 instead (debugging)
     if (static const char* reg = std::getenv("DC_PS_REG"); reg && type == OutType::Float && i.target == 0) {
@@ -1400,7 +1403,7 @@ void Emitter::EmitExp(const Inst& i) {
         }
         if (type == OutType::Float) {
             Line(dst + (NanProbe() ? " = dc_probe(float4(" + value + "));" : " = float4(" + value + ");"));
-            ClampUfloat(i.target, dst);
+            ClampUfloat(rt, dst);
             ProbeNanExport(dst);
         }
         else if (type == OutType::Uint) Line(dst + " = uint4(" + value + ");");
@@ -1411,7 +1414,7 @@ void Emitter::EmitExp(const Inst& i) {
         const std::string v4 = "float4(" + comp(0, "0.0f") + ", " + comp(1, "0.0f") + ", " + comp(2, "0.0f") + ", " +
                                comp(3, "1.0f") + ")";
         Line(dst + " = " + (NanProbe() ? "dc_probe(" + v4 + ")" : v4) + ";");
-        ClampUfloat(i.target, dst);
+        ClampUfloat(rt, dst);
         ProbeNanExport(dst);
     } else {
         const char* t = type == OutType::Uint ? "uint4" : "int4";
@@ -1756,6 +1759,13 @@ std::string Emitter::Run() {
         }
         src += "};\nstruct PsOut {\n";
         for (u32 k = 0; k < 8; ++k) {
+            if (o.dual_source && k == 1) {
+                // Declared even when the shader does not export MRT1: Metal
+                // rejects SRC1 blend factors without an index(1) output.
+                const char* t = o.mrt_type[0] == OutType::Float ? "float4" : o.mrt_type[0] == OutType::Uint ? "uint4" : "int4";
+                src += std::string("    ") + t + " c1 [[color(0), index(1)]];\n";
+                continue;
+            }
             if ((p.mrt_mask & (1u << k)) && ((o.col_format >> (4 * k)) & 0xF)) {
                 const char* t = o.mrt_type[k] == OutType::Float ? "float4" : o.mrt_type[k] == OutType::Uint ? "uint4" : "int4";
                 src += std::string("    ") + t + " c" + N(k) + " [[color(" + N(k) + ")]];\n";

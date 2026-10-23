@@ -85,6 +85,9 @@ struct MslOptions {
     std::array<OutType, 8> mrt_type{};
     u32 mrt_ufloat = 0; // MRTs stored as unsigned small floats (R11G11B10)
     bool depth_target = true; // false drops depth exports (no depth attachment)
+    // CB0 blends with SRC1 factors: MRT1 is exported as the second blend source
+    // of target 0 ([[color(0), index(1)]]), as on the hardware.
+    bool dual_source = false;
     // DB_DEPTH_CONTROL.DEPTH_BOUNDS_ENABLE: discard where the stored depth (a copy at
     // texture(kDepthBoundsTexture)) is outside [min, max] (buffer(kDepthBoundsBuffer)).
     bool depth_bounds = false;
