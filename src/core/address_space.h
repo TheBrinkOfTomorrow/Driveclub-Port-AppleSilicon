@@ -19,7 +19,13 @@ constexpr VAddr kSystemManagedMax = 0x7FFFFC000;
 constexpr VAddr kSystemReservedMin = 0x7FFFFC000;
 constexpr VAddr kSystemReservedMax = 0xFC0000000;
 // Direct and flexible memory mappings; games use fixed addresses from 64 GB up.
+// Under Rosetta 2 (DC_ROSETTA) 0xFC0000000-0x7000000000 belongs to the
+// translator, so the user range starts above it.
+#ifdef DC_ROSETTA
+constexpr VAddr kUserMin = 0x7000000000;
+#else
 constexpr VAddr kUserMin = 0x1000000000;
+#endif
 constexpr VAddr kUserMax = 0x600000000000;
 
 enum class Prot : int { None = 0, Read = 1, Write = 2, Exec = 4, ReadWrite = 3 };

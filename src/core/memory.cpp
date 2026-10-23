@@ -130,7 +130,15 @@ int Place(VAddr* addr, u64 size, int flags, u64 align) {
         }
         return 0;
     }
-    const VAddr found = FindFree(*addr, size, align);
+    VAddr found = FindFree(*addr, size, align);
+    // A hint is only advisory. Under Rosetta 2 the game's hints (32 GB+) can
+    // fall in the translator's reserved hole, so retry inside our ranges.
+    if (!found && *addr) {
+        found = FindFree(AddressSpace::kUserMin, size, align);
+    }
+    if (!found && *addr) {
+        found = FindFree(0, size, align);
+    }
     if (!found) {
         return ENOMEM;
     }

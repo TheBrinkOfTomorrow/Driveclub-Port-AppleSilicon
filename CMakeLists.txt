@@ -31,6 +31,13 @@ find_package(SDL3 REQUIRED CONFIG)
 # -march for the host code. "native" fails when cross-building x86_64 on Apple
 # Silicon (clang reports the arm64 CPU); use e.g. x86-64-v2 for Rosetta 2.
 set(DC_MARCH native CACHE STRING "Value passed to -march in Release builds")
+# Rosetta 2 reserves 0xFC0000000-0x7000000000; move the guest user range above it.
+option(DC_ROSETTA "Build for running under Rosetta 2 on Apple Silicon" OFF)
+if (DC_ROSETTA)
+    set(DC_GUEST_USER_ADDR 0x7000000000)
+else()
+    set(DC_GUEST_USER_ADDR 0x1000000000)
+endif()
 
 # Platform core, HLE and the GPU front end (PM4, tiling, GCN decode).
 set(DC_CORE_SOURCES
@@ -128,6 +135,9 @@ set(DC_METAL_SOURCES
 add_executable(driveclub ${DC_CORE_SOURCES} ${DC_METAL_SOURCES})
 
 target_include_directories(driveclub PRIVATE src)
+if (DC_ROSETTA)
+    target_compile_definitions(driveclub PRIVATE DC_ROSETTA)
+endif()
 
 target_compile_options(driveclub PRIVATE
     -Wall -Wextra -Wno-unused-parameter
@@ -144,7 +154,7 @@ target_link_options(driveclub PRIVATE
     -Wl,-segaddr,GUEST_TCB,0x4000
     -Wl,-segaddr,GUEST_SYSMGD,0x400000
     -Wl,-segaddr,GUEST_SYSRSV,0x7FFFFC000
-    -Wl,-segaddr,GUEST_USER,0x1000000000
+    -Wl,-segaddr,GUEST_USER,${DC_GUEST_USER_ADDR}
 )
 
 target_link_libraries(driveclub PRIVATE

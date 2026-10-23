@@ -140,6 +140,37 @@ bool Linker::LoadModule(const std::filesystem::path& path, VAddr base) {
     return true;
 }
 
+#ifdef DC_ROSETTA
+namespace {
+
+// Rosetta 2 reserves 0xFC0000000-0x7000000000, where v1.28 maps its PRT
+// aperture at the fixed address 0x1000000000. The address comes only from
+// these four `movabs r64, 0x1000000000` (Munmap, SetPrtAperture and the
+// MAP_FIXED MapDirectMemory calls); move it to 0x8000000000.
+constexpr u64 kPrtApertureSites[] = {0x748d85, 0x748d8f, 0x749247, 0x74925a};
+constexpr u8 kPrtApertureImm[] = {0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00};
+constexpr u8 kPrtApertureMoved = 0x80; // 0x1000000000 -> 0x8000000000
+
+void PatchPrtAperture(const Module& eboot) {
+    for (const u64 site : kPrtApertureSites) {
+        const auto* insn = reinterpret_cast<const u8*>(eboot.Base() + site);
+        const bool movabs = (insn[0] == 0x48 || insn[0] == 0x49) && (insn[1] & 0xF8) == 0xB8;
+        if (site + 10 > eboot.Size() || !movabs ||
+            std::memcmp(insn + 2, kPrtApertureImm, sizeof(kPrtApertureImm)) != 0) {
+            DC_INFO("prt aperture: eboot+%#llx does not match v1.28, not patching", site);
+            return;
+        }
+    }
+    for (const u64 site : kPrtApertureSites) {
+        reinterpret_cast<u8*>(eboot.Base() + site)[2 + 4] = kPrtApertureMoved;
+    }
+    DC_INFO("prt aperture: moved 0x1000000000 -> 0x8000000000 (%zu sites)",
+            std::size(kPrtApertureSites));
+}
+
+} // namespace
+#endif
+
 bool Linker::LoadGame(const std::filesystem::path& game_dir) {
     if (!LoadModule(game_dir / "eboot.bin", kExecutableBase)) {
         return false;
@@ -160,6 +191,10 @@ bool Linker::LoadGame(const std::filesystem::path& game_dir) {
         }
         next = AlignUp(modules.back()->Base() + modules.back()->Size() + kModuleGap, 1 << 20);
     }
+
+#ifdef DC_ROSETTA
+    PatchPrtAperture(*modules[0]);
+#endif
 
     // Module TLS indices start at 1, in load order; the executable must be 1
     // because its block is the static one in front of the TCB.
