@@ -23,8 +23,33 @@ namespace Hle::Pad {
 
 namespace {
 
-constexpr s32 kPadHandle = 1;
-constexpr s32 kErrorInvalidPortType = -2137980926; // 0x80920002
+constexpr s32 kErrorInvalidArg = static_cast<s32>(0x80920001);
+constexpr s32 kErrorAlreadyOpened = static_cast<s32>(0x80920004);
+constexpr s32 kErrorInvalidUser = static_cast<s32>(0x809B0001); // device service
+constexpr s32 kPortTypeRemoteControl = 16;
+constexpr s32 kUserSystem = 0xFF;
+
+// One handle per (user, port type, index), all fed by the one controller, as
+// in shadPS4. v1.28 opens a special port (type 2) first, then the standard
+// one; it got "invalid port type" for the first and ignored the pad's input.
+std::mutex g_handles_lock;
+std::map<std::tuple<s32, s32, s32>, s32> g_handles;
+s32 g_next_handle = 1;
+
+s32 OpenPad(const char* fn, s32 userId, s32 type, s32 index) {
+    s32 result;
+    if (userId < 0 || userId == kUserSystem) {
+        result = kErrorInvalidUser;
+    } else if (type == kPortTypeRemoteControl) {
+        result = kErrorInvalidArg;
+    } else {
+        std::scoped_lock lk(g_handles_lock);
+        auto [it, added] = g_handles.try_emplace({userId, type, index}, 0);
+        result = added ? (it->second = g_next_handle++) : kErrorAlreadyOpened;
+    }
+    DC_INFO("%s(userId=%#x, type=%d, index=%d) -> %d", fn, userId, type, index, result);
+    return result;
+}
 
 s32 scePadInit() {
     DC_INFO("scePadInit()");
@@ -32,23 +57,19 @@ s32 scePadInit() {
 }
 
 s32 scePadOpen(s32 userId, s32 type, s32 index, const void* param) {
-    if (type != 0) {
-        return kErrorInvalidPortType;
-    }
-    DC_INFO("scePadOpen(userId=%#x, type=%d, index=%d) -> handle %d", userId, type, index, kPadHandle);
-    return kPadHandle;
+    return OpenPad("scePadOpen", userId, type, index);
 }
 
 s32 scePadOpenExt(s32 userId, s32 type, s32 index, const void* param) {
-    if (type != 0) {
-        return kErrorInvalidPortType;
-    }
-    DC_INFO("scePadOpenExt(userId=%#x, type=%d, index=%d) -> handle %d", userId, type, index, kPadHandle);
-    return kPadHandle;
+    return OpenPad("scePadOpenExt", userId, type, index);
 }
 
 s32 scePadClose(s32 handle) {
     DC_INFO("scePadClose(handle=%d)", handle);
+    {
+        std::scoped_lock lk(g_handles_lock);
+        std::erase_if(g_handles, [&](const auto& e) { return e.second == handle; });
+    }
     return 0;
 }
 
