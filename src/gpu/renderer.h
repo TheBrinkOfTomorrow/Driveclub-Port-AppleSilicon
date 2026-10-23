@@ -49,6 +49,9 @@ public:
     virtual void Draw(const Liverpool::RegFile& regs, const DrawCall& draw) = 0;
     virtual void Dispatch(const Liverpool::RegFile& regs, std::uint32_t x, std::uint32_t y,
                           std::uint32_t z) = 0;
+    // Dispatch whose group counts (3 dwords) the GPU reads from guest memory at
+    // `args` when it runs; false if the renderer cannot (the caller then syncs).
+    virtual bool DispatchIndirect(const Liverpool::RegFile& regs, std::uint64_t args) { return false; }
 
     // End of one guest submission: hand recorded work to the host GPU.
     virtual void OnSubmit() = 0;

@@ -2352,7 +2352,8 @@ struct MetalRenderer::Impl {
   }
 
   void Draw(const RegFile &r, const DrawCall &dc);
-  void Dispatch(const RegFile &r, u32 x, u32 y, u32 z);
+  // `indirect`: guest address of the group counts, read by the GPU (0: x/y/z).
+  void Dispatch(const RegFile &r, u32 x, u32 y, u32 z, u64 indirect = 0);
   void Flip(const FlipInfo &f);
   std::unordered_map<u64, id<MTLComputePipelineState>> compute_pipelines;
 
@@ -3165,7 +3166,8 @@ void MetalRenderer::Impl::Draw(const RegFile &r, const DrawCall &dc) {
                 baseInstance:0];
 }
 
-void MetalRenderer::Impl::Dispatch(const RegFile &r, u32 gx, u32 gy, u32 gz) {
+void MetalRenderer::Impl::Dispatch(const RegFile &r, u32 gx, u32 gy, u32 gz,
+                                    u64 indirect) {
   const u64 addr = r.ProgramAddr(Reg::COMPUTE_PGM_LO);
   const u32 rsrc2 = r[Reg::COMPUTE_PGM_RSRC2];
   const u32 *ud = r.UserData(Reg::COMPUTE_USER_DATA_0);
@@ -3180,7 +3182,12 @@ void MetalRenderer::Impl::Dispatch(const RegFile &r, u32 gx, u32 gy, u32 gz) {
             ud[4], ud[5], ud[6], ud[7], ud[8], ud[9], ud[10], ud[11], ud[12],
             ud[13], ud[14], ud[15]);
   }
-  if (!addr || !gx || !gy || !gz) {
+  id<MTLBuffer> ibuf = nil;
+  u64 ioff = 0;
+  if (indirect && !Locate(indirect, 12, &ibuf, &ioff)) {
+    return;
+  }
+  if (!addr || (!ibuf && (!gx || !gy || !gz))) {
     return;
   }
   ++stat_dispatches;
@@ -3376,8 +3383,14 @@ void MetalRenderer::Impl::Dispatch(const RegFile &r, u32 gx, u32 gy, u32 gz) {
   // LDS_SIZE is in 128-dword units on CI; Metal wants a multiple of 16 bytes.
   const u32 lds = std::max<u32>(16, Bits(rsrc2, 15, 9) * 512);
   [e setThreadgroupMemoryLength:std::min<u32>(lds, 32768) atIndex:0];
-  [e dispatchThreadgroups:MTLSizeMake(gx, gy, gz)
-      threadsPerThreadgroup:MTLSizeMake(tx, ty, tz)];
+  if (ibuf) {
+    [e dispatchThreadgroupsWithIndirectBuffer:ibuf
+                         indirectBufferOffset:ioff
+                        threadsPerThreadgroup:MTLSizeMake(tx, ty, tz)];
+  } else {
+    [e dispatchThreadgroups:MTLSizeMake(gx, gy, gz)
+        threadsPerThreadgroup:MTLSizeMake(tx, ty, tz)];
+  }
   [e endEncoding];
   if (dump_passes && trace && dump_frames) {
     u32 n = 0;
@@ -3605,6 +3618,19 @@ void MetalRenderer::Draw(const RegFile &regs, const DrawCall &draw) {
       impl->ProfileCut(what);
     }
   }
+}
+
+bool MetalRenderer::DispatchIndirect(const RegFile &regs, std::uint64_t args) {
+  std::scoped_lock lk(impl->lock);
+  @autoreleasepool {
+    id<MTLBuffer> buf = nil;
+    u64 off = 0;
+    if (!impl->Locate(args, 12, &buf, &off)) {
+      return false;
+    }
+    impl->Dispatch(regs, 0, 0, 0, args);
+  }
+  return true;
 }
 
 void MetalRenderer::Dispatch(const RegFile &regs, std::uint32_t x,

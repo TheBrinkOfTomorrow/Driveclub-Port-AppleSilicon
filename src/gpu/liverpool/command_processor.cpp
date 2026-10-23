@@ -64,9 +64,9 @@ void WriteFence(u32 data_sel, u32 lo, u32 hi, u32 data_lo, u32 data_hi) {
     }
 }
 
-// Group counts no real dispatch reaches. v1.28 issues ~2^31 x 2^31 x 2^31
-// dispatches when its counters come from IMAGE_ATOMIC_ADD, which the MSL
-// backend does not translate yet; running them hangs the host GPU.
+// Group counts no real dispatch reaches; running one hangs the host GPU.
+// Safety net: v1.28's GPU-patched DISPATCH_DIRECT sizes once came through as
+// stale ~2^31 values before stream patches were handled.
 bool SaneDispatch(u32 x, u32 y, u32 z) {
     constexpr u32 kMaxGroups = 0xFFFF;
     if (x <= kMaxGroups && y <= kMaxGroups && z <= kMaxGroups) {
@@ -420,6 +420,14 @@ void CommandProcessor::Execute(std::span<const u32> cmds, bool compute, int dept
     const u32* end = p + cmds.size();
 
     const u32* recent[4] = {}; // last packets, for desync reports
+    // DMA_DATA copies from GPU memory into packets still ahead of us (the
+    // command stream patching itself). They run on the GPU in order with
+    // their producers; until then the packets they land in are stale here.
+    struct StreamPatch {
+        u64 dst, src;
+        u32 bytes;
+    };
+    std::vector<StreamPatch> patches;
     while (p < end) {
         const u32 header = *p;
         const u32 type = HeaderType(header);
@@ -462,6 +470,27 @@ void CommandProcessor::Execute(std::span<const u32> cmds, bool compute, int dept
         const u32 body_n = HeaderBodyDwords(header);
         const u32* body = p + 1;
         ++stats.packets;
+
+        // A patched DISPATCH_DIRECT reads its sizes on the GPU (below); any
+        // other packet with patched contents waits for the copy instead.
+        u64 patched_dispatch = 0;
+        if (!patches.empty()) {
+            const u64 lo = reinterpret_cast<u64>(p), hi = reinterpret_cast<u64>(body + body_n);
+            for (auto it = patches.begin(); it != patches.end();) {
+                if (it->dst >= hi || it->dst + it->bytes <= lo) {
+                    ++it;
+                    continue;
+                }
+                const u64 args = reinterpret_cast<u64>(body);
+                if (op == Op::DispatchDirect && it->dst <= args && args + 12 <= it->dst + it->bytes) {
+                    patched_dispatch = it->src + (args - it->dst);
+                } else {
+                    SyncRenderer();
+                    std::memmove(reinterpret_cast<void*>(it->dst), reinterpret_cast<const void*>(it->src), it->bytes);
+                }
+                it = patches.erase(it);
+            }
+        }
 
         switch (op) {
         case Op::Nop:
@@ -553,6 +582,7 @@ void CommandProcessor::Execute(std::span<const u32> cmds, bool compute, int dept
             const u32 bytes = cmd & 0x1FFFFF;
             const u32 src_sel = (ctl >> 29) & 3; // 0/3 memory, 1 GDS, 2 data
             const u32 dst_sel = (ctl >> 20) & 3; // 0/3 memory, 1 GDS
+            bool patches_stream = false;
             if ((cmd >> 27) & 1) {
                 break; // destination is register space: cache prefetch hints
             }
@@ -562,7 +592,18 @@ void CommandProcessor::Execute(std::span<const u32> cmds, bool compute, int dept
                 const u64 dst_addr = dsel ? (body[3] & 0xFFFF) : u64(body[3]) | (u64(body[4]) << 32);
                 const u64 src_addr = ssel == 2 ? body[1]
                                    : ssel == 1 ? (body[1] & 0xFFFF) : u64(body[1]) | (u64(body[2]) << 32);
-                if (bytes && renderer->DmaData(dsel, dst_addr, ssel, src_addr, bytes)) {
+                // A copy into the packets still ahead of us patches the command
+                // stream (v1.28 writes DISPATCH_DIRECT sizes computed on the GPU
+                // this way), and we parse those packets on the CPU.
+                const u64 ahead_lo = reinterpret_cast<u64>(p + body_n + 1);
+                const u64 ahead_hi = reinterpret_cast<u64>(end);
+                patches_stream = !dsel && dst_addr < ahead_hi && dst_addr + bytes > ahead_lo;
+                if (bytes && patches_stream && ssel == 0 &&
+                    renderer->DmaData(dsel, dst_addr, ssel, src_addr, bytes)) {
+                    patches.push_back({dst_addr, src_addr, bytes});
+                    break;
+                }
+                if (bytes && !patches_stream && renderer->DmaData(dsel, dst_addr, ssel, src_addr, bytes)) {
                     break;
                 }
             }
@@ -575,7 +616,9 @@ void CommandProcessor::Execute(std::span<const u32> cmds, bool compute, int dept
                 }
                 break;
             }
-            SyncRenderer(); // the GPU may still be producing what we copy
+            if (!(patches_stream && src_sel == 2)) {
+                SyncRenderer(); // the GPU may still be producing what we copy
+            }
             if (src_sel == 2) {
                 for (u32 k = 0; k + 4 <= bytes; k += 4) {
                     std::memcpy(dst + k, &body[1], 4);
@@ -691,6 +734,13 @@ void CommandProcessor::Execute(std::span<const u32> cmds, bool compute, int dept
 
         case Op::DispatchDirect:
             ++stats.dispatches;
+            if (renderer && patched_dispatch && renderer->DispatchIndirect(regs, patched_dispatch)) {
+                break;
+            }
+            if (patched_dispatch) {
+                SyncRenderer();
+                std::memmove(const_cast<u32*>(body), reinterpret_cast<const void*>(patched_dispatch), 12);
+            }
             if (renderer && SaneDispatch(body[0], body[1], body[2])) {
                 renderer->Dispatch(regs, body[0], body[1], body[2]);
             }
