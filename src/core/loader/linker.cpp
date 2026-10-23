@@ -1,8 +1,13 @@
 #include "core/loader/linker.h"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
+#include <thread>
+#include <unordered_map>
 
 #include <sys/mman.h>
 
@@ -112,6 +117,71 @@ extern "C" u64 DcUnresolvedImport(u32 index) {
     }
     return 0;
 }
+
+// DC_COUNT_HLE: every import bound to an HLE function goes through a thunk
+// that counts its calls (movabs r11, &count; lock inc [r11]; movabs r11, fn;
+// jmp r11 -- only r11, so arguments and AL for varargs are untouched). A
+// thread logs each function's first call: what the game starts calling after
+// an input or a screen change.
+namespace {
+
+struct CountedImport {
+    std::string library, nid;
+};
+u8* g_count_code = nullptr;
+std::vector<CountedImport> g_counted;
+std::unique_ptr<std::atomic<u64>[]> g_counts;
+std::unordered_map<std::string, VAddr> g_count_thunks;
+
+bool CountHle() {
+    static const bool on = std::getenv("DC_COUNT_HLE") != nullptr;
+    return on;
+}
+
+VAddr CountingThunk(const std::string& library, const std::string& nid, VAddr target) {
+    if (!g_count_code) {
+        void* mem = mmap(nullptr, kStubSize * kMaxStubs, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+        if (mem == MAP_FAILED) {
+            return target;
+        }
+        g_count_code = static_cast<u8*>(mem);
+        g_counts = std::make_unique<std::atomic<u64>[]>(kMaxStubs);
+        std::thread([] {
+            std::vector<bool> seen(kMaxStubs);
+            for (;;) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                for (size_t i = 0; i < g_counted.size() && i < kMaxStubs; ++i) {
+                    if (!seen[i] && g_counts[i].load(std::memory_order_relaxed)) {
+                        seen[i] = true;
+                        DC_INFO("hle: first call %s %.*s", g_counted[i].library.c_str(),
+                                static_cast<int>(Hle::NameOf(g_counted[i].nid).size()),
+                                Hle::NameOf(g_counted[i].nid).data());
+                    }
+                }
+            }
+        }).detach();
+    }
+    const std::string key = library + "#" + nid;
+    if (const auto it = g_count_thunks.find(key); it != g_count_thunks.end()) {
+        return it->second;
+    }
+    const size_t index = g_counted.size();
+    if (index >= kMaxStubs) {
+        return target;
+    }
+    g_counted.push_back({library, nid});
+    u8* p = g_count_code + index * kStubSize;
+    const u64 counter = reinterpret_cast<u64>(&g_counts[index]);
+    p[0] = 0x49; p[1] = 0xBB; std::memcpy(p + 2, &counter, 8);         // movabs r11, counter
+    p[10] = 0xF0; p[11] = 0x49; p[12] = 0xFF; p[13] = 0x03;             // lock inc qword [r11]
+    p[14] = 0x49; p[15] = 0xBB; std::memcpy(p + 16, &target, 8);        // movabs r11, target
+    p[24] = 0x41; p[25] = 0xFF; p[26] = 0xE3;                           // jmp r11
+    const VAddr thunk = reinterpret_cast<VAddr>(p);
+    g_count_thunks.emplace(key, thunk);
+    return thunk;
+}
+
+} // namespace
 
 Linker::Linker() {
     instance = this;
@@ -274,6 +344,9 @@ VAddr Linker::ResolveImport(const Module& m, std::string_view symbol_name) {
     }
     if (void* fn = Hle::Lookup(lib->name, sn.nid)) {
         ++stats.bound_to_hle;
+        if (CountHle()) {
+            return CountingThunk(lib->name, std::string(sn.nid), reinterpret_cast<VAddr>(fn));
+        }
         return reinterpret_cast<VAddr>(fn);
     }
     ++stats.bound_to_stub;
@@ -343,6 +416,9 @@ void Linker::Relocate() {
     }
     if (stub_code) {
         mprotect(stub_code, kStubSize * kMaxStubs, PROT_READ | PROT_EXEC);
+    }
+    if (g_count_code) {
+        mprotect(g_count_code, kStubSize * kMaxStubs, PROT_READ | PROT_EXEC);
     }
 }
 
