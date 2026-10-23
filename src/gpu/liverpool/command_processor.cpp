@@ -594,6 +594,16 @@ void CommandProcessor::Execute(std::span<const u32> cmds, bool compute, int dept
                 }
                 u32 iters = 0;
                 while (!Compare(func, *addr & mask, ref)) {
+                    // Another ring (async compute) may post the release while we
+                    // spin; its value counts once queued, and its signal only lands
+                    // once that work is committed.
+                    if (PendingFence(reinterpret_cast<u64>(addr), &pending) &&
+                        Compare(func, pending & mask, ref)) {
+                        break;
+                    }
+                    if (renderer && (iters & 0xfff) == 0xfff) {
+                        renderer->OnSubmit();
+                    }
                     if (++iters > 1000000) {
                         DC_WARN("gpu: WaitRegMem timeout (addr=%p val=%#x ref=%#x mask=%#x func=%u)",
                                 addr, *addr, ref, mask, func);
