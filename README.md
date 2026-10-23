@@ -118,13 +118,17 @@ The runtime takes one game directory (`eboot.bin`, `sce_module/` and the data fi
 ./build-rosetta/driveclub <game dir>
 ```
 
+**Controls**
+
+- Gamepad (DualSense, DualShock 4, Xbox, ...): as on the PS4. Left stick steers, R2/L2 throttle and brake.
+- Keyboard: Enter/Space/K Cross, L Circle, J Square, I Triangle, Esc/Tab Options, arrows D-pad, Q/E L1/R1; W/S throttle and brake, A/D steer; V toggles vsync.
+- `DC_AUTOPRESS=40,50` presses Cross at those seconds, `DC_AUTODRIVE=100` holds the throttle from then (unattended runs).
+
 **Status**
 
 - Renders the front end (event preview with "Start Event") at about 25 FPS on an M4 Pro.
 - Open items:
-  - `IMAGE_ATOMIC_ADD` is not translated to MSL. The indirect dispatches that depend on it are skipped for now (`gpu: skipping dispatch` in the log).
-  - Pipelines that need dual-source blending fail to build.
-  - Input has not been tested beyond the front end.
+  - Pressing Cross on "Start Event" reaches the game but does not start the event yet.
 
 ## Game Files
 
