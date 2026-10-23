@@ -74,6 +74,31 @@ constexpr std::array<u32, 115> kInitSequence{
 };
 
 // ------------------------------------------------------------- Compute queues ----
+// Initial hardware state for sceGnmDrawInitDefaultHardwareState200 (118 dwords,
+// shadPS4's InitSequence200 without its CLEAR_STATE preamble)
+constexpr std::array<u32, 118> kInitSequence200{
+    0xc0017600u, 0x216u, 0xffffffffu, 0xc0017600u, 0x217u, 0xffffffffu,
+    0xc0017600u, 0x215u, 0u, 0xc0016900u, 0x2f9u, 0x2du,
+    0xc0016900u, 0x282u, 8u, 0xc0016900u, 0x280u, 0x80008u,
+    0xc0016900u, 0x281u, 0xffff0000u, 0xc0016900u, 0x204u, 0u,
+    0xc0016900u, 0x206u, 0x43fu, 0xc0016900u, 0x83u, 0xffffu,
+    0xc0016900u, 0x317u, 0x10u, 0xc0016900u, 0x2fau, 0x3f800000u,
+    0xc0016900u, 0x2fcu, 0x3f800000u, 0xc0016900u, 0x2fbu, 0x3f800000u,
+    0xc0016900u, 0x2fdu, 0x3f800000u, 0xc0016900u, 0x202u, 0xcc0010u,
+    0xc0016900u, 0x30eu, 0xffffffffu, 0xc0016900u, 0x30fu, 0xffffffffu,
+    0xc0002f00u, 1u, 0xc0017600u, 7u, 0x1701ffu, 0xc0017600u,
+    0x46u, 0x1701fdu, 0xc0017600u, 0x87u, 0x1701ffu, 0xc0017600u,
+    0xc7u, 0x1701fdu, 0xc0017600u, 0x107u, 0x17u, 0xc0017600u,
+    0x147u, 0x1701fdu, 0xc0017600u, 0x47u, 0x1cu, 0xc0016900u,
+    0x1b1u, 2u, 0xc0016900u, 0x101u, 0u, 0xc0016900u,
+    0x100u, 0xffffffffu, 0xc0016900u, 0x103u, 0u, 0xc0016900u,
+    0x284u, 0u, 0xc0016900u, 0x290u, 0u, 0xc0016900u,
+    0x2aeu, 0u, 0xc0016900u, 0x292u, 0u, 0xc0016900u,
+    0x293u, 0x6020000u, 0xc0016900u, 0x2f8u, 0u, 0xc0016900u,
+    0x2deu, 0x1e9u, 0xc0036900u, 0x295u, 0x100u, 0x100u,
+    4u, 0xc0017900u, 0x200u, 0xe0000000u,
+};
+
 struct ComputeQueue {
     u32 pipe_id;
     u32 queue_id;
@@ -106,7 +131,8 @@ void TriggerGnmEvent(u32 irq) {
 }
 
 // ----------------------------------------------------- PM4 hardware init ----
-u32 sceGnmDrawInitDefaultHardwareState(u32* cmdbuf, u32 size) {
+template <size_t N>
+u32 WriteDrawInitDefaultHardwareState(u32* cmdbuf, u32 size, const std::array<u32, N>& init) {
     if (!cmdbuf || size < kHwInitPacketSize) {
         return 0;
     }
@@ -114,14 +140,23 @@ u32 sceGnmDrawInitDefaultHardwareState(u32* cmdbuf, u32 size) {
     std::memcpy(p, kClearStateSequence.data(), kClearStateSequence.size() * 4);
     p += kClearStateSequence.size();
 
-    std::memcpy(p, kInitSequence.data(), kInitSequence.size() * 4);
-    p += kInitSequence.size();
+    std::memcpy(p, init.data(), init.size() * 4);
+    p += init.size();
 
     const u32 left = (cmdbuf + kHwInitPacketSize) - p;
     if (left > 1) {
         WriteNop(p, left - 1); // header + body fill the block exactly
     }
     return kHwInitPacketSize;
+}
+
+u32 sceGnmDrawInitDefaultHardwareState(u32* cmdbuf, u32 size) {
+    return WriteDrawInitDefaultHardwareState(cmdbuf, size, kInitSequence);
+}
+
+// v1.28 calls the 2.00 SDK variant.
+u32 sceGnmDrawInitDefaultHardwareState200(u32* cmdbuf, u32 size) {
+    return WriteDrawInitDefaultHardwareState(cmdbuf, size, kInitSequence200);
 }
 
 u32 sceGnmDispatchInitDefaultHardwareState(u32* cmdbuf, u32 size) {
@@ -551,6 +586,7 @@ void RegisterGnmDriver() {
     Instance().SetInterruptHandler([](u32 irq) { TriggerGnmEvent(irq); });
 
     Hle::Register("libSceGnmDriver", "Idffwf3yh8s", reinterpret_cast<void*>(sceGnmDrawInitDefaultHardwareState));
+    Hle::Register("libSceGnmDriver", "0H2vBYbTLHI", reinterpret_cast<void*>(sceGnmDrawInitDefaultHardwareState200));
     Hle::Register("libSceGnmDriver", "nF6bFRUBRAU", reinterpret_cast<void*>(sceGnmDispatchInitDefaultHardwareState));
 
     Hle::Register("libSceGnmDriver", "bQVd5YzCal0", reinterpret_cast<void*>(sceGnmSetPsShader));
