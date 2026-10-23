@@ -93,7 +93,14 @@ std::vector<std::filesystem::path> ListPrx(const std::filesystem::path& dir) {
 extern "C" u64 DcUnresolvedImport(u32 index) {
     static const bool strict = std::getenv("DC_STRICT") != nullptr;
     auto& u = Linker::unresolved[index];
-    if (u.calls++ < 3 || strict) {
+    const u64 calls = u.calls++;
+    if (calls >= 99 && (calls == 99 || calls == 999 || calls == 9999 || calls == 99999)) {
+        // Polled: something keeps waiting on this stub's 0.
+        DC_WARN("unimplemented: %s %.*s (%s) called %llu times", u.library.c_str(),
+                static_cast<int>(Hle::NameOf(u.nid).size()), Hle::NameOf(u.nid).data(), u.nid.c_str(),
+                static_cast<unsigned long long>(calls + 1));
+    }
+    if (calls < 3 || strict) {
         const std::string caller =
             Linker::Instance()->Describe(reinterpret_cast<u64>(__builtin_return_address(0)));
         DC_WARN("unimplemented: %s %.*s (%s) from %s", u.library.c_str(),
