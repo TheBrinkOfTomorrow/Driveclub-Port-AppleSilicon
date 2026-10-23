@@ -28,6 +28,10 @@ set(CMAKE_OSX_ARCHITECTURES x86_64)
 
 find_package(SDL3 REQUIRED CONFIG)
 
+# -march for the host code. "native" fails when cross-building x86_64 on Apple
+# Silicon (clang reports the arm64 CPU); use e.g. x86-64-v2 for Rosetta 2.
+set(DC_MARCH native CACHE STRING "Value passed to -march in Release builds")
+
 # Platform core, HLE and the GPU front end (PM4, tiling, GCN decode).
 set(DC_CORE_SOURCES
     src/main.mm
@@ -128,7 +132,7 @@ target_include_directories(driveclub PRIVATE src)
 target_compile_options(driveclub PRIVATE
     -Wall -Wextra -Wno-unused-parameter
     $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>
-    $<$<CONFIG:Release>:-O3 -march=native>
+    $<$<CONFIG:Release>:-O3 -march=${DC_MARCH}>
 )
 
 # Guest memory is mapped at its PS4 addresses (executable at 0x400000), which
