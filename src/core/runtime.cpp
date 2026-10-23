@@ -83,8 +83,10 @@ int StartModule(const char* name, u64 args, const void* argp) {
     }
     DC_INFO("starting module %s with args=%llu argp=%p", name, args, argp);
     using ModuleStart = int (*)(u64 args, const void* argp, void* param);
-    const int ret = reinterpret_cast<ModuleStart>(m->InitAddr())(
-        args, argp, reinterpret_cast<void*>(m->ProcParam()));
+    // The third argument is a continuation that libc's _init tail-calls when
+    // non-null; v1.28's libc.prx has a module param segment, so passing
+    // ProcParam() there jumped into data. Modules get null, as on hardware.
+    const int ret = reinterpret_cast<ModuleStart>(m->InitAddr())(args, argp, nullptr);
     DC_INFO("module %s started: %d", name, ret);
     return ret;
 }
