@@ -129,12 +129,20 @@ s64 Sce64(s64 r) {
     return r < 0 ? OrbisError(errno) : r;
 }
 
+// DC_LOG_FILES: log every open and stat with its result (debugging).
+bool LogFiles() {
+    static const bool on = std::getenv("DC_LOG_FILES") != nullptr;
+    return on;
+}
+
 s32 sceKernelOpen(const char* path, int flags, u16 mode) {
     const fs::path host = Translate(path);
     if (host.empty()) {
+        if (LogFiles()) DC_INFO("file: open %s -> unmounted", path);
         return OrbisError(ENOENT);
     }
     const int fd = open(host.c_str(), HostOpenFlags(flags), mode ? mode : 0644);
+    if (LogFiles()) DC_INFO("file: open %s (flags %#x) -> %d", path, flags, fd < 0 ? -errno : fd);
     if (fd < 0) {
         const int err = errno;
         if (err != ENOENT) {
@@ -193,8 +201,10 @@ s32 sceKernelStat(const char* path, GuestStat* out) {
     const fs::path host = Translate(path);
     struct stat h;
     if (host.empty() || stat(host.c_str(), &h) != 0) {
+        if (LogFiles()) DC_INFO("file: stat %s -> missing", path);
         return OrbisError(host.empty() ? ENOENT : errno);
     }
+    if (LogFiles()) DC_INFO("file: stat %s -> ok", path);
     ToGuest(h, out);
     return ORBIS_OK;
 }
