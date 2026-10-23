@@ -16,6 +16,7 @@
 #include <unistd.h>
 
 #include "common/log.h"
+#include "core/loader/linker.h"
 #include "hle/hle.h"
 #include "hle/kernel/kernel.h"
 
@@ -142,7 +143,12 @@ s32 sceKernelOpen(const char* path, int flags, u16 mode) {
         return OrbisError(ENOENT);
     }
     const int fd = open(host.c_str(), HostOpenFlags(flags), mode ? mode : 0644);
-    if (LogFiles()) DC_INFO("file: open %s (flags %#x) -> %d", path, flags, fd < 0 ? -errno : fd);
+    if (LogFiles()) {
+        DC_INFO("file: open %s (flags %#x) -> %d from %s", path, flags, fd < 0 ? -errno : fd,
+                Core::Loader::Linker::Instance()
+                    ->Describe(reinterpret_cast<u64>(__builtin_return_address(0)))
+                    .c_str());
+    }
     if (fd < 0) {
         const int err = errno;
         if (err != ENOENT) {
@@ -151,6 +157,23 @@ s32 sceKernelOpen(const char* path, int flags, u16 mode) {
         return OrbisError(err);
     }
     return fd;
+}
+
+// POSIX write: the game's and FMOD's printf output (fd 1/2) goes to our log.
+s64 posix_write(int fd, const void* buf, u64 n) {
+    if ((fd == 1 || fd == 2) && buf) {
+        const char* text = static_cast<const char*>(buf);
+        u64 len = n;
+        while (len && (text[len - 1] == '\n' || text[len - 1] == '\r')) {
+            --len;
+        }
+        if (len) {
+            DC_INFO("guest: %.*s", static_cast<int>(len), text);
+        }
+        return static_cast<s64>(n);
+    }
+    const s64 r = Sce64(write(fd, buf, n));
+    return r < 0 ? FailErrno(r & 0xFFFF) : r;
 }
 
 int posix_open(const char* path, int flags, u16 mode) {
@@ -332,6 +355,8 @@ void RegisterFile() {
     for (const char* lib : {"libkernel", "libScePosix"}) {
         DC_HLE_AS(lib, "open", posix_open);
         DC_HLE_AS(lib, "fstat", posix_fstat);
+        DC_HLE_AS(lib, "write", posix_write);
+        DC_HLE_AS(lib, "_write", posix_write); // what libc's stdio calls
     }
 }
 
