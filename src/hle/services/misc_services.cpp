@@ -3,6 +3,10 @@
 #include "hle/services/misc_services.h"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cstring>
+#include <thread>
 #include <sys/time.h>
 #include <unistd.h>
 
@@ -108,9 +112,27 @@ s32 sceAppContentAppParamGetString(s32 paramId, char* buf, size_t buf_size) {
     return 0;
 }
 
-// libSceAudioIn
+// libSceAudioIn: a silent microphone. No host capture device is opened (so
+// macOS never asks for microphone access); input returns zeros at the port's
+// real-time rate, so the voice chat thread neither spins nor stalls.
+std::atomic<u32> g_audio_in_len{256};
+std::atomic<u32> g_audio_in_freq{16000};
+
 s32 sceAudioInOpen(s32 user_id, s32 port_type, s32 index, u32 len, u32 freq, u32 param) {
+    g_audio_in_len.store(len ? len : 256);
+    g_audio_in_freq.store(freq ? freq : 16000);
+    DC_INFO("sceAudioInOpen(type=%d, len=%u, freq=%u) -> silent port", port_type, len, freq);
     return 1;
+}
+
+// Fills one buffer of 16-bit mono silence and returns its sample count.
+s32 sceAudioInInput(s32 handle, void* dest) {
+    const u32 len = g_audio_in_len.load();
+    if (dest) {
+        std::memset(dest, 0, len * sizeof(s16));
+    }
+    std::this_thread::sleep_for(std::chrono::microseconds(u64(len) * 1000000 / g_audio_in_freq.load()));
+    return static_cast<s32>(len);
 }
 
 s32 sceAudioInClose(s32 handle) {
@@ -315,6 +337,7 @@ void RegisterMiscServices() {
     DC_HLE("libSceAppContent", sceAppContentAppParamGetString);
 
     DC_HLE("libSceAudioIn", sceAudioInOpen);
+    DC_HLE("libSceAudioIn", sceAudioInInput);
     DC_HLE("libSceAudioIn", sceAudioInClose);
     DC_HLE("libSceAudioIn", sceAudioInGetSilentState);
 
