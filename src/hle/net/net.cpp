@@ -3,6 +3,7 @@
 #include "hle/net/net.h"
 
 #include <arpa/inet.h>
+#include <cstdlib>
 #include <cstring>
 
 #include "common/log.h"
@@ -82,8 +83,10 @@ s32 sceNetInit() {
 }
 
 s32 sceNetCtlGetState(s32* state) {
+    // Offline by default (DISCONNECTED); DC_ONLINE=1 reports an address.
+    static const bool online = std::getenv("DC_ONLINE") != nullptr;
     if (state) {
-        *state = 3; // ORBIS_NET_CTL_STATE_IPOBTAINED
+        *state = online ? 3 : 0; // ORBIS_NET_CTL_STATE_IPOBTAINED : DISCONNECTED
     }
     return 0;
 }

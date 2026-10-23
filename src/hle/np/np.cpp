@@ -2,6 +2,7 @@
 
 #include "hle/np/np.h"
 
+#include <cstdlib>
 #include <cstring>
 
 #include "common/log.h"
@@ -14,8 +15,20 @@ namespace {
 // Error codes
 constexpr s32 kErrorNpSignedOut = static_cast<s32>(0x80550006);
 
+// Offline console by default: the user is signed out of PSN, like shadPS4
+// without shadNet. A signed-in "Player" without a network sent v1.28 down its
+// online path on "Start Event". DC_ONLINE=1 restores the signed-in answers.
+bool SignedIn() {
+    static const bool online = std::getenv("DC_ONLINE") != nullptr;
+    return online;
+}
+
 // libSceNpManager
 s32 sceNpGetNpId(s32 user_id, void* np_id) {
+    if (!SignedIn()) {
+        DC_INFO("sceNpGetNpId(user_id=%#x) -> signed out", user_id);
+        return kErrorNpSignedOut;
+    }
     if (np_id) {
         std::memset(np_id, 0, 32);
         std::strncpy(reinterpret_cast<char*>(np_id), "Player", 16);
@@ -25,6 +38,10 @@ s32 sceNpGetNpId(s32 user_id, void* np_id) {
 }
 
 s32 sceNpGetOnlineId(s32 user_id, void* online_id) {
+    if (!SignedIn()) {
+        DC_INFO("sceNpGetOnlineId(user_id=%#x) -> signed out", user_id);
+        return kErrorNpSignedOut;
+    }
     if (online_id) {
         std::memset(online_id, 0, 20);
         std::strncpy(reinterpret_cast<char*>(online_id), "Player", 16);
@@ -94,7 +111,7 @@ s32 sceNpRegisterStateCallback(void* cb, void* arg) {
 
 s32 sceNpCheckNpAvailability(s32 user_id) {
     (void)user_id;
-    return 0;
+    return SignedIn() ? 0 : kErrorNpSignedOut;
 }
 
 s32 sceNpNotifyPlusFeature(s32 user_id, s32 feature, s64 reserved) {
