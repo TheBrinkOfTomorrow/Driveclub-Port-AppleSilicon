@@ -64,6 +64,21 @@ void WriteFence(u32 data_sel, u32 lo, u32 hi, u32 data_lo, u32 data_hi) {
     }
 }
 
+// Group counts no real dispatch reaches. v1.28 issues ~2^31 x 2^31 x 2^31
+// dispatches when its counters come from IMAGE_ATOMIC_ADD, which the MSL
+// backend does not translate yet; running them hangs the host GPU.
+bool SaneDispatch(u32 x, u32 y, u32 z) {
+    constexpr u32 kMaxGroups = 0xFFFF;
+    if (x <= kMaxGroups && y <= kMaxGroups && z <= kMaxGroups) {
+        return true;
+    }
+    static std::atomic<int> reported{0};
+    if (reported.fetch_add(1) < 8) {
+        DC_WARN("gpu: skipping dispatch of %ux%ux%u groups", x, y, z);
+    }
+    return false;
+}
+
 bool Compare(u32 func, u32 value, u32 ref) {
     switch (func) {
     case 0: return true;
@@ -676,14 +691,14 @@ void CommandProcessor::Execute(std::span<const u32> cmds, bool compute, int dept
 
         case Op::DispatchDirect:
             ++stats.dispatches;
-            if (renderer) {
+            if (renderer && SaneDispatch(body[0], body[1], body[2])) {
                 renderer->Dispatch(regs, body[0], body[1], body[2]);
             }
             break;
         case Op::DispatchIndirect: {
             ++stats.dispatches;
             const u32* a = IndirectArgs(body[0], 3);
-            if (renderer && a) {
+            if (renderer && a && SaneDispatch(a[0], a[1], a[2])) {
                 renderer->Dispatch(regs, a[0], a[1], a[2]);
             }
             break;
