@@ -81,6 +81,8 @@ enum Button : u32 {
 
 void SetButton(u32 button, bool pressed);
 void SetStick(bool right, u8 x, u8 y);
+// Analog L2/R2 (0-255); also sets the L2/R2 button while pressed.
+void SetTrigger(bool right, u8 value);
 
 void RegisterPad();
 
