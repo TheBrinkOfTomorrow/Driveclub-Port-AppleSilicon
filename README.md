@@ -82,6 +82,50 @@ cmake --build build
 
 **Windows**: download a release build, or build the launcher and runtime from [`windows/`](windows/README.md).
 
+## Apple Silicon (Rosetta 2)
+
+The macOS backend also runs on Apple Silicon Macs under Rosetta 2, tested with the US v1.28 dump (CUSA00093) on an M4 Pro.
+
+Rosetta 2 reserves `0xFC0000000`–`0x7000000000` in every x86_64 process, so `-DDC_ROSETTA=ON` moves the guest user range above it. On the v1.28 eboot it also relocates the fixed PRT aperture from `0x1000000000` to `0x8000000000`, after checking the original bytes.
+
+**Requirements**
+
+- Rosetta 2 (`softwareupdate --install-rosetta --agree-to-license`), Xcode, CMake, Ninja
+- An **x86_64** SDL3. Homebrew's arm64 SDL3 in `/opt/homebrew` will not link, so build SDL3 from source:
+
+```bash
+cmake -S SDL -B sdl3-build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_OSX_ARCHITECTURES=x86_64 -DCMAKE_INSTALL_PREFIX=$HOME/x86_64-prefix \
+      -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF
+cmake --build sdl3-build && cmake --install sdl3-build
+```
+
+**Build**
+
+```bash
+cmake -S . -B build-rosetta -G Ninja -DCMAKE_PREFIX_PATH=$HOME/x86_64-prefix \
+      -DDC_ROSETTA=ON -DDC_MARCH=x86-64-v2
+cmake --build build-rosetta
+file build-rosetta/driveclub   # Mach-O 64-bit executable x86_64
+```
+
+**Run**
+
+The runtime takes one game directory (`eboot.bin`, `sce_module/` and the data files). For a base dump plus an update, build a merged directory of symlinks: every file from the base, with the update's files taking precedence.
+
+```bash
+./build-rosetta/driveclub <game dir> --load-only   # load and link only
+./build-rosetta/driveclub <game dir>
+```
+
+**Status**
+
+- Renders the front end (event preview with "Start Event") at about 25 FPS on an M4 Pro.
+- Open items:
+  - `IMAGE_ATOMIC_ADD` is not translated to MSL. The indirect dispatches that depend on it are skipped for now (`gpu: skipping dispatch` in the log).
+  - Pipelines that need dual-source blending fail to build.
+  - Input has not been tested beyond the front end.
+
 ## Game Files
 
 Game files **are not included** in the repository and must never be committed (see `.gitignore`).
