@@ -95,7 +95,8 @@ s32 sceKernelSetVirtualRangeName(void* addr, u64 len, const char* name) {
     return ORBIS_OK;
 }
 
-s32 sceKernelSetPrtAperture(int, void*, u64) {
+s32 sceKernelSetPrtAperture(int id, void* addr, u64 size) {
+    DC_INFO("set prt aperture %d at %p size %#llx (not emulated)", id, addr, size);
     return ORBIS_OK;
 }
 

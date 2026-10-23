@@ -890,6 +890,13 @@ struct MetalRenderer::Impl {
         gpu_ns += static_cast<u64>((c.GPUEndTime - c.GPUStartTime) * 1e9);
       }];
     }
+    [cmd addCompletedHandler:^(id<MTLCommandBuffer> c) {
+      static std::atomic<int> reported{0};
+      if (c.error && reported.fetch_add(1) < 8) {
+        DC_WARN("gpu: command buffer failed: %s",
+                c.error.localizedDescription.UTF8String);
+      }
+    }];
     [cmd commit];
     last_committed = cmd;
     cmd = nil;
@@ -3553,6 +3560,19 @@ void MetalRenderer::Impl::Flip(const FlipInfo &f) {
     DC_INFO("gpu: flip #%llu %#llx %ux%u (%s), %llu draws so far", frame_count,
             f.address, f.width, f.height, rt ? "gpu target" : "cpu memory",
             draw_count);
+  }
+  // Guest flip rate (the window title counts presenter refreshes instead).
+  static auto rate_start = std::chrono::steady_clock::now();
+  static u64 rate_frames = 0;
+  ++rate_frames;
+  const double rate_secs = std::chrono::duration<double>(
+                               std::chrono::steady_clock::now() - rate_start)
+                               .count();
+  if (rate_secs >= 5.0) {
+    DC_INFO("gpu: %.1f guest flips/s (flip #%llu, %llu draws so far)",
+            rate_frames / rate_secs, frame_count, draw_count);
+    rate_start = std::chrono::steady_clock::now();
+    rate_frames = 0;
   }
 }
 
